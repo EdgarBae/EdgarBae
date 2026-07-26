@@ -60,10 +60,12 @@ class RuleBasedOperator:
     ) -> list[Command]:
         commands: list[Command] = []
 
-        # 1) Reactive: address degraded / down systems, worst first.
+        # 1) Reactive: address degraded / down systems AND systems that are
+        #    still "up" but tripping an alert threshold — catching e.g. a heap
+        #    leak from the HighMemory signal before it becomes an outage.
         troubled = [
             s for s in enterprise.systems.values()
-            if s.state() != SystemState.UP
+            if s.state() != SystemState.UP or _alerting(s)
         ]
         troubled.sort(key=lambda s: s.health())
         for system in troubled:
@@ -122,6 +124,18 @@ class RuleBasedOperator:
             return FaultKind.SLOW_QUERY, list(_LATENCY_PLAYBOOK)
         # Fallback: generic restart.
         return FaultKind.API_TIMEOUT, [ActionKind.RESTART, ActionKind.SCALE_OUT]
+
+
+def _alerting(system: System) -> bool:
+    """A system worth attention even before it formally degrades."""
+    m = system.metrics
+    return (
+        m.get(Metric.MEMORY) > 85
+        or m.get(Metric.DISK) > 88
+        or m.get(Metric.QUEUE_DEPTH) > 110
+        or m.get(Metric.ERROR_RATE) > SLA_ERROR_RATE
+        or m.get(Metric.LATENCY) > SLA_LATENCY_MS
+    )
 
 
 _PREVENTIVE_FOR_REASON: dict[str, ActionKind] = {

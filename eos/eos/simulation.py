@@ -46,11 +46,14 @@ class Simulator:
         chaos: ChaosEngine | None = None,
         aging: AgingEngine | None = None,
         seed: int = 0,
+        scripted_faults: dict[int, list[tuple[str, "FaultKind"]]] | None = None,
     ):
         self.enterprise = enterprise
         self.operator = operator or RuleBasedOperator()
         self.chaos = chaos or ChaosEngine(seed=seed)
         self.aging = aging or AgingEngine()
+        # tick -> [(system_id, FaultKind)] injected deterministically (scenarios).
+        self.scripted_faults = scripted_faults or {}
         self.clock = SimClock()
         self.helpdesk = HelpDesk()
         self.ledger = HealthLedger(n_systems=len(enterprise.systems))
@@ -82,6 +85,10 @@ class Simulator:
         # 2) Random chaos.
         for fault in self.chaos.maybe_inject(self.enterprise, tick, self._active()):
             self.faults.append(fault)
+
+        # 2b) Scripted faults for controlled scenarios (deterministic).
+        for system_id, kind in self.scripted_faults.get(tick, []):
+            self.faults.append(self.chaos.inject(system_id, kind, tick, origin="scenario"))
 
         # 3) Materialise metrics from load + active faults.
         self._recompute_metrics(age_faults=True)

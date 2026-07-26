@@ -97,13 +97,50 @@ eos/
 │   └── health.py        # HealthLedger → Enterprise Health Score (§15)
 ├── harness/         # the operator-evaluation layer (the point of EOS)
 │   ├── observation.py   # Observation: the ONLY thing an operator may perceive
+│   ├── observability.py # tool-shaped surface: Prometheus / logs / alerts / runbooks
 │   ├── agent.py         # Operator protocol + AgentOperator (LLM/MCP seam)
 │   ├── evaluator.py     # run_scenario / benchmark → EHS + transcript
+│   ├── scenario.py      # ITBench-style scenarios + solve-rate leaderboard
 │   └── transcript.py    # replayable run record the inspector consumes
 ├── enterprise_factory.py# a default virtual petrochemical company (§3, §5)
 ├── simulation.py        # the tick loop that wires it all together (§14)
+├── bench.py             # `python -m eos.bench` — the leaderboard
 └── cli.py               # `python -m eos.cli`
 ```
+
+### Where EOS sits — and what to plug in
+
+EOS is one layer of a three-layer stack, and it is **not** the operator or the
+runtime:
+
+| Layer | What | Examples |
+|-------|------|----------|
+| Operator (agent) | diagnoses & recovers | OpenSRE, Aurora, STRATUS, your LLM agent |
+| Runtime / meta-harness | runs & governs the agent | **Omnigent** (Databricks) — YAML agents, policy-as-code, sandbox |
+| **Evaluation environment** | **scores the operator** | **EOS**, IBM **ITBench** |
+
+Omnigent is complementary, not competing: run the operator-under-test as an
+Omnigent-managed agent, and let EOS be the environment that scores it (its
+policy-as-code covers the PRD's §7 governance). The closest peer is ITBench —
+a suite of *discrete, real-infra* IT tasks. EOS is the *continuous, simulated*
+counterpart: cheap, deterministic, and able to measure **prevention** and
+**long-horizon cost** that discrete tasks miss. Run the same operator on both:
+EOS as the fast pre-eval, ITBench as the real-infra final.
+
+### Two ways to score, side by side (`python -m eos.bench`)
+
+```
+operator                      EHS   solve %   scenarios
+baseline (preventive)        77.3    100.0%   5/5
+baseline (no preventive)     37.2    100.0%   5/5
+naive agent                  23.8     40.0%   2/5
+```
+
+- **EHS** — the continuous, long-horizon run (availability, prevention, cost).
+- **Solve %** — an ITBench-style suite (`harness/scenario.py`): a controlled
+  fault, a goal, a pass/fail check, with random chaos off so the result is the
+  operator's, not luck. (For reference, SOTA agents solve ~11% of ITBench's SRE
+  scenarios — the gap EOS exists to close cheaply.)
 
 ### The harness: plugging in an AI operator
 

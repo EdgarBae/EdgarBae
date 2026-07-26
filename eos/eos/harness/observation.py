@@ -15,6 +15,7 @@ from ..domain.organization import Enterprise
 from ..engines.aging_engine import AgingEngine
 from ..engines.time_engine import SimClock
 from ..ops.helpdesk import HelpDesk
+from . import observability as obs
 
 
 @dataclass
@@ -56,6 +57,11 @@ class Observation:
     systems: list[SystemView] = field(default_factory=list)
     tickets: list[TicketView] = field(default_factory=list)
     aging_warnings: list[dict[str, str]] = field(default_factory=list)
+    # Tool-shaped observability surface (Prometheus / logs / alerts / runbooks).
+    prometheus: list[dict] = field(default_factory=list)
+    logs: list[dict] = field(default_factory=list)
+    alerts: list[dict] = field(default_factory=list)
+    runbooks: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -95,8 +101,17 @@ class Observation:
                 state=t.state.value, assignee=t.assignee, age=clock.tick - t.opened_tick,
             ))
         warnings = [{"system": sid, "reason": r} for sid, r in aging.warnings(enterprise)]
+
+        prom, log_lines, fires = [], [], []
+        for s in enterprise.systems.values():
+            sig = obs.signals(s, clock.tick)
+            prom.extend(sig["prometheus"])
+            log_lines.extend(sig["logs"])
+            fires.extend(sig["alerts"])
         return cls(
             tick=clock.tick, phase=clock.phase.value,
             load=round(clock.load_factor(), 2), month_end=clock.is_month_end,
             ehs=ehs, systems=systems, tickets=tickets, aging_warnings=warnings,
+            prometheus=prom, logs=log_lines, alerts=fires,
+            runbooks=obs.runbook_index(),
         )

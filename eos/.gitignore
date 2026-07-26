@@ -5,3 +5,6 @@ __pycache__/
 .venv/
 build/
 dist/
+
+# Your real governance rules — keep private, never commit
+enterprise_policy.local.json

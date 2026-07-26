@@ -22,6 +22,10 @@ class Command:
     action: ActionKind
     diagnosed_kind: FaultKind | None  # None => preventive maintenance
     rationale: str
+    # Governance intent (see harness/policy.py). A policy-aware operator sets
+    # request_approval on changes that need sign-off; emergency marks break-glass.
+    request_approval: bool = False
+    emergency: bool = False
 
 
 # Ordered recovery candidates to try for each dominant symptom. The first entry
@@ -46,6 +50,10 @@ class RuleBasedOperator:
     def __init__(self, operator_id: str = "op-generalist", preventive: bool = True):
         self.id = operator_id
         self.preventive = preventive
+        # Governance policy (set by the harness). When present, this operator
+        # complies: it requests approval for changes, defers during freezes, and
+        # refuses to touch forbidden systems — escalating instead of acting.
+        self.governance_policy = None
         # system_id -> actions already attempted for the current incident
         self._attempts: dict[str, set[ActionKind]] = {}
 
@@ -88,7 +96,35 @@ class RuleBasedOperator:
                 ))
                 handled.add(sid)
 
+        if self.governance_policy is not None:
+            commands = self._comply(commands, enterprise)
         return commands
+
+    def _comply(self, commands: list[Command], enterprise: Enterprise) -> list[Command]:
+        """Annotate/filter proposed actions to respect the governance policy.
+
+        Forbidden systems/actions are escalated (dropped, not executed); changes
+        during a freeze are deferred unless it's an outage (break-glass); every
+        remaining change requests approval unless the policy is fully autonomous.
+        """
+        p = self.governance_policy
+        clock = getattr(enterprise, "_clock", None)
+        phase = clock.phase.value if clock else "business"
+        month_end = clock.is_month_end if clock else False
+        out: list[Command] = []
+        for c in commands:
+            if c.action.value in p.forbidden_actions or c.system_id in p.forbidden_systems:
+                continue  # out of scope -> escalate to a human, do not act
+            is_outage = enterprise.systems[c.system_id].state() == SystemState.DOWN
+            if p.in_freeze(phase, month_end):
+                if is_outage and p.emergency_override_allowed:
+                    c.emergency = True
+                    c.request_approval = True
+                    out.append(c)
+                continue  # otherwise defer the change out of the freeze window
+            c.request_approval = (p.autonomy != "autonomous")
+            out.append(c)
+        return out
 
     def _diagnose_and_act(self, system: System) -> Command:
         guess, playbook = self._diagnose(system)

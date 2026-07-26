@@ -37,11 +37,12 @@ def run_scenario(
     chaos_p: float = 0.08,
     with_transcript: bool = True,
     ehs_noprev: float | None = None,
+    policy=None,
 ) -> RunResult:
     enterprise = build_default_enterprise()
     operator = operator_factory()
     chaos = ChaosEngine(seed=seed, probability=chaos_p)
-    sim = Simulator(enterprise, operator=operator, chaos=chaos, seed=seed)
+    sim = Simulator(enterprise, operator=operator, chaos=chaos, seed=seed, policy=policy)
     sim.run(ticks)
     report = sim.ledger.report()
     return RunResult(

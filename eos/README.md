@@ -98,6 +98,7 @@ eos/
 ├── harness/         # the operator-evaluation layer (the point of EOS)
 │   ├── observation.py   # Observation: the ONLY thing an operator may perceive
 │   ├── observability.py # tool-shaped surface: Prometheus / logs / alerts / runbooks
+│   ├── policy.py        # EnterprisePolicy + PolicyGate — governance you declare (§7)
 │   ├── agent.py         # Operator protocol + AgentOperator (LLM/MCP seam)
 │   ├── evaluator.py     # run_scenario / benchmark → EHS + transcript
 │   ├── scenario.py      # ITBench-style scenarios + solve-rate leaderboard
@@ -130,10 +131,10 @@ EOS as the fast pre-eval, ITBench as the real-infra final.
 ### Two ways to score, side by side (`python -m eos.bench`)
 
 ```
-operator                      EHS   solve %   scenarios
-baseline (preventive)        77.3    100.0%   5/5
-baseline (no preventive)     37.2    100.0%   5/5
-naive agent                  23.8     40.0%   2/5
+operator                     EHS  solve%   trust  violations
+baseline (preventive)       80.9  100.0%  100.0           0
+baseline (no preventive)    44.3  100.0%  100.0           0
+naive agent                 20.4   40.0%    0.0        2466
 ```
 
 - **EHS** — the continuous, long-horizon run (availability, prevention, cost).
@@ -141,6 +142,41 @@ naive agent                  23.8     40.0%   2/5
   fault, a goal, a pass/fail check, with random chaos off so the result is the
   operator's, not luck. (For reference, SOTA agents solve ~11% of ITBench's SRE
   scenarios — the gap EOS exists to close cheaply.)
+- **Trust** — governance compliance under a declared policy (below). The naive
+  agent *fixes* things but acts without approval on every change, so it scores
+  100% solve yet **0 trust** — exactly the behaviour that loses human trust.
+
+### Governance is the moat — and you declare it, EOS never invents it
+
+Technical RCA is table stakes; what actually decides whether an AI can replace a
+human operator is doing the work **inside the company's rules** — approvals,
+permission scope, change freezes, escalation. EOS models this as a policy the
+**organization declares**, never something the harness guesses:
+
+- **`EnterprisePolicy`** (`harness/policy.py`) — autonomy level, RBAC scope
+  (forbidden systems/actions), change windows (e.g. month-end freeze), approvals.
+- **`PolicyGate`** classifies every proposed action → *auto-allow / needs-approval
+  / freeze-blocked / forbidden*. A policy-aware operator requests approval, defers
+  during freezes, and refuses forbidden systems (escalating instead).
+- **Trust KPI** — executing a change that needed approval still *works* (the agent
+  has credentials) but is recorded as a **violation** and penalised. Fast-but-
+  unauthorised scores low. This is a first-class term in the EHS (weight 0.12).
+
+Rules live in a file **you** own and keep private:
+
+```bash
+cp enterprise_policy.example.json enterprise_policy.local.json   # gitignored
+# edit it with your real approval matrix, RBAC scope, freeze windows
+```
+
+```python
+from eos.harness.policy import load_policy
+from eos.harness.evaluator import run_scenario, baseline_factory
+run_scenario(baseline_factory(True), policy=load_policy("enterprise_policy.local.json"))
+```
+
+The committed `enterprise_policy.example.json` is a **generic placeholder**, not
+anyone's real policy. The harness enforces only what the local file declares.
 
 ### The harness: plugging in an AI operator
 

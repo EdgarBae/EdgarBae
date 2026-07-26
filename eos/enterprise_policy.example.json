@@ -1,0 +1,32 @@
+{
+  "_comment": "EXAMPLE governance policy — this is a GENERIC placeholder, not any real organization's rules. Copy this file to 'enterprise_policy.local.json' (gitignored) and replace every value with YOUR organization's actual rules. The harness enforces and scores ONLY what you declare here; it never infers or invents rules.",
+
+  "autonomy": "propose_approve",
+  "_autonomy_options": "read_only | propose_approve | guardrailed | autonomous",
+
+  "rbac": {
+    "_comment": "Permission scope. Which systems/actions the AI may NEVER touch autonomously, and which low-risk actions are pre-approved (guardrailed mode).",
+    "forbidden_systems": [],
+    "forbidden_actions": [],
+    "auto_allowed_actions": ["clear_cache", "cleanup_logs", "flush_queue", "kill_slow_query", "restart_worker"]
+  },
+
+  "change_windows": {
+    "_comment": "When changes are frozen. Fill in your real freeze periods (e.g. month-end close, blackout phases).",
+    "freeze_when_month_end": true,
+    "freeze_phases": [],
+    "allowed_phases": []
+  },
+
+  "approval": {
+    "_comment": "Who signs off, and whether break-glass emergency action is permitted for outages.",
+    "approver_role": "Change Manager",
+    "emergency_override_allowed": true
+  },
+
+  "notification": {
+    "_comment": "Escalation / communication rules. Declared here; enforcement is the next slice.",
+    "notify_on_severity": ["high", "critical"],
+    "notify_within_ticks": 2
+  }
+}

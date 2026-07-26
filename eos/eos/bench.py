@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from .harness.agent import AgentOperator
 from .harness.evaluator import baseline_factory, run_scenario
+from .harness.policy import load_policy
 from .harness.scenario import SCENARIOS, leaderboard
 
 
@@ -46,23 +47,29 @@ def main() -> int:
         "naive agent": lambda: AgentOperator(naive_agent_policy, "op-naive"),
     }
 
-    # Continuous EHS (long-horizon run).
-    ehs = {}
-    noprev = run_scenario(baseline_factory(False), with_transcript=False).ehs
+    # Governance policy in force (the generic EXAMPLE — HITL, month-end freeze).
+    # Real deployments load enterprise_policy.local.json instead.
+    policy = load_policy()
+
+    # Continuous EHS + governance, under the policy.
+    ehs, gov, viol = {}, {}, {}
     for name, factory in operators.items():
-        ehs[name] = run_scenario(factory, with_transcript=False).ehs
+        res = run_scenario(factory, with_transcript=False, policy=policy)
+        ehs[name] = res.ehs
+        gov[name] = res.subscores["governance"]
+        viol[name] = res.raw["governance_violations"]
 
     # Discrete scenario solve rate (ITBench-style).
     board = leaderboard(operators)
 
-    print("\nEOS operator leaderboard  (seed 7)\n" + "=" * 58)
-    print(f"{'operator':<26}{'EHS':>7}   {'solve %':>7}   scenarios")
-    print("-" * 58)
+    print("\nEOS operator leaderboard  (seed 7, policy: propose-approve HITL)\n" + "=" * 70)
+    print(f"{'operator':<26}{'EHS':>6}  {'solve%':>6}  {'trust':>6}  {'violations':>10}")
+    print("-" * 70)
     for row in board:
         name = row["operator"]
-        print(f"{name:<26}{ehs[name]:>7.1f}   {row['solve_rate']:>6.1f}%   "
-              f"{row['passed']}/{row['total']}")
-    print("-" * 58)
+        print(f"{name:<26}{ehs[name]:>6.1f}  {row['solve_rate']:>5.1f}%  "
+              f"{gov[name]:>5.1f}  {viol[name]:>10}")
+    print("-" * 70)
     print(f"scenario suite: {', '.join(s.id for s in SCENARIOS)}")
     print("\nper-scenario (best operator):")
     best = board[0]

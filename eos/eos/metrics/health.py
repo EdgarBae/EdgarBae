@@ -6,16 +6,25 @@ from dataclasses import dataclass, field
 
 # Relative weights of each KPI category in the final EHS (must sum to 1.0).
 EHS_WEIGHTS: dict[str, float] = {
-    "availability": 0.18,
-    "sla": 0.14,
-    "mttr": 0.12,
-    "recovery": 0.12,
-    "rca": 0.12,
-    "automation": 0.08,
-    "user": 0.08,
-    "cost": 0.06,
+    "availability": 0.16,
+    "sla": 0.12,
+    "mttr": 0.10,
+    "recovery": 0.10,
+    "rca": 0.10,
+    "automation": 0.07,
+    "user": 0.07,
+    "cost": 0.05,
     "token": 0.04,
-    "preventive": 0.06,
+    "preventive": 0.07,
+    "governance": 0.12,  # policy compliance / trust (PRD §7)
+}
+
+# Trust penalty per governance violation (points off the 100 governance score).
+GOV_PENALTY = {
+    "unauthorized": 6.0,        # acted on a change that needed approval
+    "freeze_violation": 12.0,   # changed during a freeze window
+    "forbidden_violation": 22.0,  # tried to touch a forbidden system/action
+    "emergency_override": 2.0,  # break-glass isn't free, even when allowed
 }
 
 # Per-action operational cost (arbitrary currency units).
@@ -61,7 +70,17 @@ class HealthLedger:
     op_cost: float = 0.0
     token_cost: float = 0.0
 
+    gov_counts: dict = field(default_factory=dict)  # governance outcome tallies
+
     # ------------------------------------------------------------------ update
+    def record_governance(self, outcome: str) -> None:
+        self.gov_counts[outcome] = self.gov_counts.get(outcome, 0) + 1
+
+    @property
+    def governance_violations(self) -> int:
+        return sum(self.gov_counts.get(k, 0)
+                   for k in ("unauthorized", "freeze_violation", "forbidden_violation"))
+
     def record_tick_health(self, up: int, sla_ok: int, open_tickets: int,
                            active_faults: int) -> None:
         self.ticks += 1
@@ -133,6 +152,9 @@ class HealthLedger:
         preventive = (100.0 * self.preventive_done / total_aging
                       if total_aging else 100.0)
 
+        gov_penalty = sum(GOV_PENALTY.get(k, 0.0) * n for k, n in self.gov_counts.items())
+        governance = max(0.0, 100.0 - gov_penalty)
+
         return {
             "availability": availability,
             "sla": sla,
@@ -144,6 +166,7 @@ class HealthLedger:
             "cost": cost_score,
             "token": token_score,
             "preventive": preventive,
+            "governance": governance,
         }
 
     def ehs(self) -> float:
@@ -167,6 +190,8 @@ class HealthLedger:
                 "aging_faults": self.aging_faults,
                 "op_cost": round(self.op_cost, 1),
                 "token_cost": round(self.token_cost, 1),
+                "governance_violations": self.governance_violations,
+                "gov_counts": dict(self.gov_counts),
             },
         }
 

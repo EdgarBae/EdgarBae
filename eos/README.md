@@ -2,22 +2,32 @@
 
 > Build an Enterprise. Train an Operator. Replace Operations.
 
-EOS is a **virtual enterprise you can run through time**. Real systems (SAP
-modules, portals, a database, EAI, infrastructure) sit under continuous load
-from AI users, while a **Chaos engine** injects sudden faults and an **Aging
-engine** wears things down slowly. An **operator** — rule-based today, an LLM
-agent tomorrow — has to diagnose problems, recover services, and perform
-preventive maintenance. Everything it does rolls up into a single
-**Enterprise Health Score (EHS)**.
+EOS is **not an app — it is a harness**: an environment for training and
+evaluating whether an AI can do the job of a human IT operator. A **virtual
+enterprise** (SAP modules, portals, a database, EAI, infrastructure) runs
+through time under load from AI users, while a **Chaos engine** injects sudden
+faults and an **Aging engine** wears things down. An **operator** — the thing
+under test — perceives only symptoms, must infer root causes, recover services,
+and do preventive maintenance. Every operator, rule-based or LLM/MCP agent, is
+scored the same way: a single **Enterprise Health Score (EHS)**.
 
 This is the Phase 1 slice of the [EOS PRD](../README.md): a working, runnable,
-deterministic core with no external dependencies. It is the harness that later
-phases plug smarter operators into.
+deterministic core with no external dependencies.
 
-**📊 Live results dashboard:** `docs/console.html` renders a seeded run as an
-operations console — the Enterprise Health Score, the 10-KPI breakdown, and a
-5-day incident timeline. Regenerate it from a fresh run with
-`python docs/build_console.py`.
+**🛰️ Harness inspector — `docs/harness.html`** (regenerate: `python docs/build_harness.py`)
+Replays a seeded run through three operator-facing surfaces, with a Korean/English
+toggle and a play/scrub transport:
+- **Systems** — the live virtual system screens the operator observes (click any
+  system to open its app screen: healthy / degraded / down).
+- **Help Desk** — the request channel: user chats (incidents + service/change
+  requests) get classified, prioritised, and routed; a composer previews the
+  classification rules on your own text.
+- **Operator** — the action feed (RCA guess vs. actual cause, recovery outcome)
+  plus a **human-intervention** panel, and the final KPI breakdown.
+
+**📊 Results dashboard — `docs/console.html`** (`python docs/build_console.py`)
+A NOC-style console: the EHS gauge, the 10-KPI breakdown, and a 5-day incident
+timeline.
 
 ## Quick start
 
@@ -85,9 +95,38 @@ eos/
 │   └── operator.py      # RuleBasedOperator: symptom→RCA→recovery (§7)
 ├── metrics/
 │   └── health.py        # HealthLedger → Enterprise Health Score (§15)
+├── harness/         # the operator-evaluation layer (the point of EOS)
+│   ├── observation.py   # Observation: the ONLY thing an operator may perceive
+│   ├── agent.py         # Operator protocol + AgentOperator (LLM/MCP seam)
+│   ├── evaluator.py     # run_scenario / benchmark → EHS + transcript
+│   └── transcript.py    # replayable run record the inspector consumes
 ├── enterprise_factory.py# a default virtual petrochemical company (§3, §5)
 ├── simulation.py        # the tick loop that wires it all together (§14)
 └── cli.py               # `python -m eos.cli`
+```
+
+### The harness: plugging in an AI operator
+
+The whole system exists to answer one question — *can an AI operate this
+enterprise as well as a human?* An operator is anything with `decide(...)` and
+`notify_recovered(...)`; `AgentOperator` adapts an external `policy` so an LLM
+or MCP tool-calling agent is scored on the exact same footing as the baseline.
+The agent sees an **`Observation`** (system screens, tickets, aging warnings)
+and **never the ground-truth fault** — inferring the cause is its job.
+
+```python
+from eos.harness.evaluator import run_scenario, benchmark, baseline_factory
+from eos.harness.agent import AgentOperator
+
+def my_llm_policy(obs: dict) -> list[dict]:
+    # serialise obs → prompt, let the model call tools, return actions:
+    return [{"system": "sap-pm", "action": "restart",
+             "diagnosis": "memory_leak", "rationale": "mem 92%"}]
+
+print(benchmark({
+    "baseline":  baseline_factory(True),
+    "my-agent":  lambda: AgentOperator(my_llm_policy, "op-llm"),
+}))   # -> [('baseline', 76.9), ('my-agent', 48.5)]  best-first
 ```
 
 ### The fault registry is the single source of truth

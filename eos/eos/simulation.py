@@ -1,18 +1,26 @@
 """The EOS simulation loop — wires every engine together (PRD §14, §15)."""
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 
-from .domain.enums import ActionKind, Metric, SystemState
+from .domain.enums import ActionKind, Metric, SystemState, TicketType, TimePhase
 from .domain.organization import Enterprise
 from .domain.systems import Metrics, System
 from .engines.aging_engine import AgingEngine
 from .engines.chaos_engine import ChaosEngine
 from .engines.time_engine import SimClock
 from .metrics.health import HealthLedger
-from .ops.helpdesk import HelpDesk
+from .ops.helpdesk import HelpDesk, Ticket
 from .ops.incidents import Fault
 from .ops.operator import Command, RuleBasedOperator
+
+# Routine (non-incident) help-desk workload — codes rendered per-language by UIs.
+_SR_CODES = ["access_request", "report_request", "password_reset",
+             "data_extract", "account_unlock"]
+_CR_CODES = ["schedule_change", "config_change", "new_user", "capacity_upgrade"]
+_DESK_HANDLING = {TicketType.SERVICE_REQUEST: 2, TicketType.CHANGE_REQUEST: 4}
+_DESK_ACTIVE_PHASES = (TimePhase.MORNING, TimePhase.BUSINESS, TimePhase.EVENING)
 
 
 @dataclass
@@ -49,6 +57,11 @@ class Simulator:
         self.faults: list[Fault] = []
         self.history: list[TickLog] = []
         self._sys_attempts: dict[str, int] = {}
+        self.desk_rng = random.Random(seed + 991)
+        # Harness instrumentation (append-only logs the transcript is built from).
+        self.metric_log: list[list] = []   # per tick: [[state_code, cpu, mem, disk, lat, err, q], ...]
+        self.event_log: list[dict] = []     # per operator command, with outcome
+        self.ehs_log: list[float] = []       # running EHS after each tick
 
     # ------------------------------------------------------------------- run
     def run(self, ticks: int) -> HealthLedger:
@@ -58,6 +71,8 @@ class Simulator:
 
     def step(self) -> TickLog:
         tick = self.clock.tick
+        # Expose the clock so an AgentOperator's Observation is time-accurate.
+        self.enterprise._clock = self.clock
 
         # 1) Aging wear + spawned faults.
         for fault in self.aging.advance(self.enterprise, tick):
@@ -84,10 +99,31 @@ class Simulator:
         self._recompute_metrics(age_faults=False)
         self._settle_recoveries(tick)
 
+        # 6b) Routine help-desk workload (service & change requests, PRD §6).
+        self._service_desk(tick)
+
         # 7) Bookkeeping for the health score.
         log = self._record_tick(tick, len(commands))
         self.clock.advance()
         return log
+
+    def _service_desk(self, tick: int) -> None:
+        """Generate and clear routine service/change requests from users."""
+        if (self.clock.phase in _DESK_ACTIVE_PHASES
+                and self.enterprise.users and self.desk_rng.random() < 0.11):
+            is_change = self.desk_rng.random() < 0.22
+            ttype = TicketType.CHANGE_REQUEST if is_change else TicketType.SERVICE_REQUEST
+            code = self.desk_rng.choice(_CR_CODES if is_change else _SR_CODES)
+            user = self.desk_rng.choice(self.enterprise.users)
+            self.helpdesk.file_request(Ticket(
+                system_id=user.system_id, type=ttype,
+                priority=3 if is_change else self.desk_rng.choice([3, 4]),
+                summary=code, opened_tick=tick, reporter_id=user.id, request_code=code,
+            ))
+        for t in self.helpdesk.service_requests(self.operator.id, tick, _DESK_HANDLING):
+            res = t.resolution_ticks()
+            if res is not None:
+                self.ledger.record_ticket_resolved(res)
 
     # -------------------------------------------------------------- internals
     def _active(self) -> list[Fault]:
@@ -123,12 +159,23 @@ class Simulator:
         is_preventive = cmd.diagnosed_kind is None
         self.ledger.record_command(is_preventive=is_preventive)
 
+        event = {
+            "t": tick, "sys": system.id, "action": cmd.action.value,
+            "diag": cmd.diagnosed_kind.value if cmd.diagnosed_kind else None,
+            "preventive": is_preventive, "rationale": cmd.rationale,
+            "rca_correct": None, "recovery": None, "resolved": False,
+        }
+        self.event_log.append(event)
+
         if is_preventive:
             self.aging.apply_preventive(system.id, cmd.action)
             return
 
         active = self._active_on(system.id)
         self._sys_attempts[system.id] = self._sys_attempts.get(system.id, 0) + 1
+        # Route the affected system's open tickets to this operator (PRD §6).
+        for t in self.helpdesk.open_for(system.id):
+            self.helpdesk.assign(t, self.operator.id)
         if not active:
             # System strained by load, not a fault: a capacity action still helps.
             self._apply_capacity_action(system, cmd.action)
@@ -137,14 +184,19 @@ class Simulator:
         primary = max(
             active, key=lambda f: system.metrics.get(f.profile.signature_metric)
         )
-        self.ledger.record_rca(cmd.diagnosed_kind == primary.kind)
+        rca_correct = cmd.diagnosed_kind == primary.kind
+        self.ledger.record_rca(rca_correct)
+        event["rca_correct"] = rca_correct
+        event["actual"] = primary.kind.value  # ground truth for the transcript
 
         target = next(
             (f for f in active if cmd.action in f.profile.recoveries), None
         )
         self.ledger.record_recovery(success=target is not None)
+        event["recovery"] = target is not None
         if target is not None:
             target.resolved_tick = tick
+            event["resolved"] = True
             self.ledger.record_fault_resolved(
                 duration_ticks=tick - target.started_tick,
                 attempts=self._sys_attempts.get(system.id, 1),
@@ -176,9 +228,12 @@ class Simulator:
                 self.operator.notify_recovered(system.id)
                 self._sys_attempts.pop(system.id, None)
 
+    _STATE_CODE = {SystemState.UP: 0, SystemState.DEGRADED: 1, SystemState.DOWN: 2}
+
     def _record_tick(self, tick: int, n_commands: int) -> TickLog:
         up = deg = down = 0
         sla_ok = 0
+        snapshot: list[list] = []
         for system in self.enterprise.systems.values():
             st = system.state()
             if st == SystemState.UP:
@@ -189,9 +244,17 @@ class Simulator:
                 down += 1
             if not system.violates_sla():
                 sla_ok += 1
+            m = system.metrics
+            snapshot.append([
+                self._STATE_CODE[st], round(m.cpu_pct), round(m.mem_pct),
+                round(m.disk_pct), round(m.latency_ms), round(m.error_rate, 3),
+                round(m.queue_depth),
+            ])
+        self.metric_log.append(snapshot)
         open_tickets = len(self.helpdesk.open_tickets)
         active = len(self._active())
         self.ledger.record_tick_health(up, sla_ok, open_tickets, active)
+        self.ehs_log.append(self.ledger.ehs())
         log = TickLog(
             tick=tick,
             phase=self.clock.phase.value,

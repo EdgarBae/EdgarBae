@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eos-simulator"
+version = "0.1.0"
+description = "Enterprise Operations Simulator (EOS) — Phase 1 MVP: a virtual enterprise for training and evaluating AI operators."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Bonghwan Bae (EdgarBae)" }]
+license = { text = "MIT" }
+keywords = ["simulation", "ai-agents", "sre", "operations", "chaos-engineering"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+eos = "eos.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["eos*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

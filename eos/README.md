@@ -14,6 +14,11 @@ This is the Phase 1 slice of the [EOS PRD](../README.md): a working, runnable,
 deterministic core with no external dependencies. It is the harness that later
 phases plug smarter operators into.
 
+**📊 Live results dashboard:** `docs/console.html` renders a seeded run as an
+operations console — the Enterprise Health Score, the 10-KPI breakdown, and a
+5-day incident timeline. Regenerate it from a fresh run with
+`python docs/build_console.py`.
+
 ## Quick start
 
 ```bash

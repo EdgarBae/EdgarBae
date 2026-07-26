@@ -1,0 +1,527 @@
+"""Regenerate docs/console.html from a fresh, seeded EOS run.
+
+    python docs/build_console.py    # run from the eos/ directory
+
+Self-contained: runs the simulator, then embeds the real results into a
+single static HTML file (no external assets, CSP-safe for publishing).
+"""
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from eos.enterprise_factory import build_default_enterprise
+from eos.engines.chaos_engine import ChaosEngine
+from eos.ops.operator import RuleBasedOperator
+from eos.simulation import Simulator
+
+SEED, TICKS = 7, 240
+
+
+def run(preventive):
+    ent = build_default_enterprise()
+    op = RuleBasedOperator(preventive=preventive)
+    chaos = ChaosEngine(seed=SEED, probability=0.08)
+    sim = Simulator(ent, operator=op, chaos=chaos, seed=SEED)
+    sim.run(TICKS)
+    return sim
+
+
+sim = run(True)
+hist = [[h.tick, h.load, h.up, h.degraded, h.down,
+         h.active_faults, h.open_tickets, h.commands] for h in sim.history]
+payload = {
+    "ehs": sim.ledger.report()["ehs"],
+    "noprev": run(False).ledger.ehs(),
+    "subs": sim.ledger.report()["subscores"],
+    "raw": sim.ledger.report()["raw"],
+    "systems": [{"id": s.id, "name": s.name, "layer": s.layer.value,
+                 "org": s.org.value, "stack": s.stack}
+                for s in sim.enterprise.systems.values()],
+    "n_users": len(sim.enterprise.users),
+    "hist": hist,
+}
+
+HTML = r"""<title>EOS — Operations Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    color-scheme: light dark;
+    --plane:#eef1f4; --surface:#ffffff; --surface-2:#f4f7f9; --inset:#eef2f5;
+    --ink:#16202b; --ink-2:#47586a; --muted:#7c8b99;
+    --hair:rgba(16,32,48,.10); --hair-2:rgba(16,32,48,.06);
+    --accent:#0f8f86; --accent-soft:rgba(15,143,134,.12);
+    --good:#0ca30c; --warn:#c98500; --serious:#d1622f; --crit:#c9332f;
+    --grid:rgba(16,32,48,.07);
+    --shadow:0 1px 2px rgba(16,32,48,.06), 0 8px 24px rgba(16,32,48,.05);
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:where(:not([data-theme="light"])){
+      --plane:#0b1118; --surface:#121c26; --surface-2:#0f1a24; --inset:#0d1620;
+      --ink:#e8eef4; --ink-2:#9db0c1; --muted:#657888;
+      --hair:rgba(255,255,255,.09); --hair-2:rgba(255,255,255,.05);
+      --accent:#2bc0b2; --accent-soft:rgba(43,192,178,.14);
+      --good:#22b551; --warn:#e0a52a; --serious:#e88a52; --crit:#e35550;
+      --grid:rgba(255,255,255,.07);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --plane:#0b1118; --surface:#121c26; --surface-2:#0f1a24; --inset:#0d1620;
+    --ink:#e8eef4; --ink-2:#9db0c1; --muted:#657888;
+    --hair:rgba(255,255,255,.09); --hair-2:rgba(255,255,255,.05);
+    --accent:#2bc0b2; --accent-soft:rgba(43,192,178,.14);
+    --good:#22b551; --warn:#e0a52a; --serious:#e88a52; --crit:#e35550;
+    --grid:rgba(255,255,255,.07);
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--plane);color:var(--ink);font-family:var(--sans);
+    line-height:1.5;-webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(1200px 600px at 78% -10%,var(--accent-soft),transparent 60%);}
+  .wrap{max-width:1160px;margin:0 auto;padding:28px 22px 64px}
+  a{color:inherit}
+
+  /* ---- top bar ---- */
+  .top{display:flex;flex-wrap:wrap;align-items:flex-end;gap:18px 24px;
+    padding-bottom:20px;border-bottom:1px solid var(--hair);margin-bottom:26px}
+  .brand{display:flex;align-items:center;gap:13px}
+  .mark{width:38px;height:38px;border-radius:10px;flex:none;position:relative;
+    background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent),#000 30%));
+    box-shadow:0 4px 14px var(--accent-soft)}
+  .mark::before,.mark::after{content:"";position:absolute;background:var(--surface);opacity:.9}
+  .mark::before{left:9px;right:9px;top:11px;height:2px;border-radius:2px;
+    box-shadow:0 6px 0 var(--surface),0 12px 0 var(--surface)}
+  .mark::after{left:9px;top:9px;width:2px;height:20px;border-radius:2px;box-shadow:none;opacity:.55}
+  h1{font-size:19px;margin:0;letter-spacing:-.01em;font-weight:650}
+  .sub{color:var(--ink-2);font-size:12.5px;margin-top:2px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+  .chip{display:inline-flex;align-items:baseline;gap:6px;padding:6px 11px;border-radius:999px;
+    background:var(--surface);border:1px solid var(--hair);font-size:12px;color:var(--ink-2);
+    box-shadow:var(--shadow)}
+  .chip b{color:var(--ink);font-weight:650;font-variant-numeric:tabular-nums;font-family:var(--mono)}
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+    font-weight:600;margin:0 0 12px}
+
+  .card{background:var(--surface);border:1px solid var(--hair);border-radius:16px;
+    box-shadow:var(--shadow)}
+
+  /* ---- hero ---- */
+  .hero{display:grid;grid-template-columns:minmax(0,320px) minmax(0,1fr);gap:16px;margin-bottom:16px}
+  .gauge{padding:22px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+  .gauge svg{width:200px;height:200px;display:block}
+  .g-num{font-family:var(--mono);font-size:44px;font-weight:600;letter-spacing:-.02em;
+    fill:var(--ink);font-variant-numeric:tabular-nums}
+  .g-of{font-family:var(--mono);font-size:13px;fill:var(--muted)}
+  .g-label{margin-top:6px;font-size:12.5px;color:var(--ink-2)}
+  .band{display:inline-flex;align-items:center;gap:7px;margin-top:10px;padding:5px 12px;border-radius:999px;
+    font-size:12px;font-weight:600;border:1px solid transparent}
+  .band .dot{width:8px;height:8px;border-radius:50%}
+
+  .compare{padding:22px 24px;display:flex;flex-direction:column;gap:2px}
+  .cmp-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:8px}
+  .cmp-head h2{font-size:15px;margin:0;font-weight:640}
+  .cmp-head p{margin:0;font-size:12.5px;color:var(--ink-2);max-width:34ch;text-align:right}
+  .bar-row{display:grid;grid-template-columns:118px 1fr 58px;align-items:center;gap:14px;padding:9px 0}
+  .bar-row .k{font-size:12.5px;color:var(--ink-2)}
+  .track{height:15px;border-radius:8px;background:var(--inset);overflow:hidden;position:relative}
+  .fill{height:100%;border-radius:8px;transform-origin:left;width:0;transition:width 1s cubic-bezier(.2,.7,.2,1)}
+  .bar-row .v{font-family:var(--mono);font-size:16px;font-weight:600;text-align:right;
+    font-variant-numeric:tabular-nums}
+  .delta{margin-top:12px;padding-top:13px;border-top:1px dashed var(--hair);
+    display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink-2)}
+  .delta b{font-family:var(--mono);color:var(--good);font-size:15px}
+
+  /* ---- kpi grid ---- */
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}
+  .kpi{background:var(--surface);border:1px solid var(--hair);border-radius:13px;padding:14px 15px;
+    box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .kpi .top-line{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .kpi .name{font-size:11.5px;color:var(--ink-2);font-weight:600;letter-spacing:.01em}
+  .kpi .w{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .kpi .val{font-family:var(--mono);font-size:27px;font-weight:600;letter-spacing:-.02em;margin:7px 0 2px;
+    font-variant-numeric:tabular-nums}
+  .kpi .mini{height:5px;border-radius:3px;background:var(--inset);overflow:hidden;margin:9px 0 8px}
+  .kpi .mini i{display:block;height:100%;border-radius:3px;width:0;transition:width .9s cubic-bezier(.2,.7,.2,1)}
+  .kpi .desc{font-size:11px;color:var(--muted);line-height:1.35}
+
+  /* ---- timeline ---- */
+  .tl{padding:20px 22px 16px;margin-bottom:16px}
+  .tl-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:6px}
+  .tl-head h2{font-size:15px;margin:0;font-weight:640}
+  .tl-head .hint{font-size:11.5px;color:var(--muted)}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-left:auto}
+  .lg{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2)}
+  .lg .sw{width:11px;height:11px;border-radius:3px}
+  .canvas-wrap{position:relative;width:100%}
+  canvas{display:block;width:100%}
+  .tip{position:absolute;pointer-events:none;opacity:0;transform:translate(-50%,-8px);
+    background:var(--surface);border:1px solid var(--hair);border-radius:10px;padding:9px 11px;
+    box-shadow:var(--shadow);font-size:11.5px;min-width:150px;z-index:5;transition:opacity .1s}
+  .tip .t-time{font-family:var(--mono);font-weight:650;color:var(--ink);margin-bottom:5px;font-size:12px}
+  .tip .t-row{display:flex;justify-content:space-between;gap:14px;color:var(--ink-2);padding:1px 0}
+  .tip .t-row span:last-child{font-family:var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
+
+  /* ---- systems ---- */
+  .grid2{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px}
+  .panel{padding:20px 22px}
+  .panel h2{font-size:15px;margin:0 0 14px;font-weight:640}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+    font-weight:600;padding:0 8px 8px;border-bottom:1px solid var(--hair)}
+  td{padding:9px 8px;border-bottom:1px solid var(--hair-2);vertical-align:middle}
+  tr:last-child td{border-bottom:0}
+  td.sid{font-family:var(--mono);color:var(--ink);font-size:11.5px}
+  .name-cell{color:var(--ink);font-weight:550}
+  .lchip{display:inline-block;padding:2px 8px;border-radius:6px;font-size:10.5px;font-weight:600;
+    background:var(--accent-soft);color:var(--accent);letter-spacing:.02em}
+  .stack{color:var(--ink-2);font-size:11.5px}
+  .flow{display:flex;flex-direction:column;gap:11px}
+  .flow-step{display:flex;gap:12px;align-items:flex-start}
+  .flow-n{font-family:var(--mono);font-size:11px;color:var(--accent);font-weight:650;
+    width:20px;flex:none;padding-top:1px}
+  .flow-t b{font-weight:600;font-size:12.5px}
+  .flow-t p{margin:1px 0 0;font-size:11.5px;color:var(--ink-2)}
+
+  footer{margin-top:28px;padding-top:18px;border-top:1px solid var(--hair);
+    display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;font-size:11.5px;color:var(--muted)}
+  footer .dotsep{opacity:.5}
+
+  @media (max-width:820px){
+    .hero{grid-template-columns:1fr}
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .grid2{grid-template-columns:1fr}
+    .meta{margin-left:0;width:100%}
+    .cmp-head p{text-align:left}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .fill,.kpi .mini i{transition:none}
+  }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"></div>
+      <div>
+        <h1>EOS — Operations Console</h1>
+        <div class="sub">Enterprise Operations Simulator · Phase&nbsp;1 · rule-based operator baseline</div>
+      </div>
+    </div>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section class="hero">
+    <div class="card gauge">
+      <svg viewBox="0 0 200 200" role="img" aria-label="Enterprise Health Score gauge">
+        <circle cx="100" cy="100" r="82" fill="none" stroke="var(--inset)" stroke-width="14"/>
+        <circle id="ring" cx="100" cy="100" r="82" fill="none" stroke="var(--accent)"
+          stroke-width="14" stroke-linecap="round" transform="rotate(-90 100 100)"
+          stroke-dasharray="515" stroke-dashoffset="515"/>
+        <text id="gnum" class="g-num" x="100" y="98" text-anchor="middle">0</text>
+        <text class="g-of" x="100" y="120" text-anchor="middle">/ 100 EHS</text>
+      </svg>
+      <div class="g-label">Enterprise Health Score over a 5-day run</div>
+      <div class="band" id="band"><span class="dot"></span><span class="txt"></span></div>
+    </div>
+
+    <div class="card compare">
+      <div class="cmp-head">
+        <h2>Operator strategy moves the score</h2>
+        <p>Same enterprise, same faults, same seed — only the operator's policy changes.</p>
+      </div>
+      <div class="bar-row">
+        <div class="k">With preventive</div>
+        <div class="track"><div class="fill" id="f-prev"></div></div>
+        <div class="v" id="v-prev"></div>
+      </div>
+      <div class="bar-row">
+        <div class="k">No preventive</div>
+        <div class="track"><div class="fill" id="f-nop"></div></div>
+        <div class="v" id="v-nop"></div>
+      </div>
+      <div class="delta">
+        <b id="d-val"></b><span>EHS gained by heading off aging faults before they break service.</span>
+      </div>
+    </div>
+  </section>
+
+  <p class="eyebrow">Health Score breakdown · 10 weighted KPIs</p>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card tl">
+    <div class="tl-head">
+      <h2>Five days under load</h2>
+      <span class="hint">hover the timeline &middot; 1 tick = 30 min</span>
+      <div class="legend">
+        <span class="lg"><span class="sw" style="background:var(--accent)"></span>Enterprise load</span>
+        <span class="lg"><span class="sw" style="background:var(--good)"></span>All up</span>
+        <span class="lg"><span class="sw" style="background:var(--warn)"></span>Degraded</span>
+        <span class="lg"><span class="sw" style="background:var(--crit)"></span>Down</span>
+        <span class="lg"><span class="sw" style="background:var(--serious)"></span>Active incidents</span>
+      </div>
+    </div>
+    <div class="canvas-wrap" id="cwrap">
+      <canvas id="tl"></canvas>
+      <div class="tip" id="tip"></div>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div class="card panel">
+      <h2>Systems under management</h2>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>ID</th><th>System</th><th>Layer</th><th>Stack</th></tr></thead>
+          <tbody id="systbl"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card panel">
+      <h2>What happens each tick</h2>
+      <div class="flow">
+        <div class="flow-step"><div class="flow-n">01</div><div class="flow-t"><b>Aging &amp; Chaos</b><p>Disks fill and certs expire; random faults inject.</p></div></div>
+        <div class="flow-step"><div class="flow-n">02</div><div class="flow-t"><b>Metrics resolve</b><p>Load × baseline + active faults set each system's state.</p></div></div>
+        <div class="flow-step"><div class="flow-n">03</div><div class="flow-t"><b>Help Desk</b><p>Unhappy virtual users file classified, prioritised tickets.</p></div></div>
+        <div class="flow-step"><div class="flow-n">04</div><div class="flow-t"><b>Operator acts</b><p>Symptom-based RCA, escalating recovery, preventive maintenance.</p></div></div>
+        <div class="flow-step"><div class="flow-n">05</div><div class="flow-t"><b>Score updates</b><p>Availability, MTTR, RCA, cost &amp; more roll into the EHS.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Deterministic &middot; seed 7 &middot; pure-stdlib Python</span>
+    <span class="dotsep">&bull;</span>
+    <span><code>python -m eos.cli --ticks 240 --seed 7</code></span>
+    <span class="dotsep">&bull;</span>
+    <span>Phase 1 of the EOS PRD &middot; the baseline every LLM operator is measured against</span>
+  </footer>
+</div>
+
+<script>
+const DATA = /*__DATA__*/;
+
+const KPI_META = {
+  availability:["Availability",0.18,"Share of system-ticks in the UP state"],
+  sla:["SLA compliance",0.14,"Meeting latency & error-rate SLAs"],
+  mttr:["MTTR",0.12,"Mean ticks to resolve a fault"],
+  recovery:["Recovery rate",0.12,"Recovery actions that actually worked"],
+  rca:["RCA accuracy",0.12,"Correct root-cause diagnoses"],
+  automation:["Automation",0.08,"Faults fixed on the first attempt"],
+  user:["User satisfaction",0.08,"Ticket resolution speed & open pain"],
+  cost:["Cost efficiency",0.06,"Operational + downtime cost"],
+  token:["Token efficiency",0.04,"Operator AI token spend"],
+  preventive:["Preventive",0.06,"Aging issues headed off in time"],
+};
+const KPI_ORDER = ["availability","sla","mttr","recovery","rca","automation","user","cost","token","preventive"];
+
+function band(v){
+  if(v>=75) return ["good","Healthy"];
+  if(v>=55) return ["warn","Watch"];
+  if(v>=40) return ["serious","Weak"];
+  return ["crit","Critical"];
+}
+function cvar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---- meta chips ---- */
+document.getElementById("meta").innerHTML = [
+  ["Seed", DATA.raw.ticks && "7"],
+  ["Duration", "5 days"],
+  ["Systems", DATA.systems.length],
+  ["Virtual users", DATA.n_users],
+  ["Ticks", DATA.raw.ticks],
+].map(([k,v])=>`<span class="chip">${k} <b>${v}</b></span>`).join("");
+
+/* ---- gauge ---- */
+(function(){
+  const ehs = DATA.ehs, C = 2*Math.PI*82;
+  const [b,label] = band(ehs);
+  const col = cvar("--"+ (b==="good"?"good":b));
+  const ring = document.getElementById("ring");
+  ring.setAttribute("stroke", col);
+  document.getElementById("gnum").textContent = ehs.toFixed(1);
+  const badge = document.getElementById("band");
+  badge.style.background = "color-mix(in oklab,"+col+" 14%, transparent)";
+  badge.style.borderColor = "color-mix(in oklab,"+col+" 40%, transparent)";
+  badge.style.color = col;
+  badge.querySelector(".dot").style.background = col;
+  badge.querySelector(".txt").textContent = label + " · above baseline";
+  const off = C*(1-ehs/100);
+  requestAnimationFrame(()=>{ ring.style.transition = reduce?"none":"stroke-dashoffset 1.2s cubic-bezier(.2,.7,.2,1)"; ring.setAttribute("stroke-dashoffset", off); });
+})();
+
+/* ---- comparison ---- */
+(function(){
+  const prev = DATA.ehs, nop = DATA.noprev;
+  document.getElementById("v-prev").textContent = prev.toFixed(1);
+  document.getElementById("v-nop").textContent = nop.toFixed(1);
+  document.getElementById("v-prev").style.color = cvar("--good");
+  document.getElementById("v-nop").style.color = cvar("--crit");
+  document.getElementById("d-val").textContent = "+"+(prev-nop).toFixed(1);
+  const fp=document.getElementById("f-prev"), fn=document.getElementById("f-nop");
+  fp.style.background=cvar("--good"); fn.style.background=cvar("--crit");
+  requestAnimationFrame(()=>{ fp.style.width=prev+"%"; fn.style.width=nop+"%"; });
+})();
+
+/* ---- kpi tiles ---- */
+document.getElementById("kpis").innerHTML = KPI_ORDER.map(k=>{
+  const [name,w,desc]=KPI_META[k]; const v=DATA.subs[k]; const [b]=band(v);
+  const col=cvar("--"+b); const unit = k==="mttr"?"":"";
+  return `<div class="kpi">
+    <div class="top-line"><span class="name">${name}</span><span class="w">w ${w.toFixed(2)}</span></div>
+    <div class="val" style="color:${col}">${v.toFixed(1)}<span style="font-size:13px;color:var(--muted)"> /100</span></div>
+    <div class="mini"><i data-w="${v}" style="background:${col}"></i></div>
+    <div class="desc">${desc}</div>
+  </div>`;
+}).join("");
+requestAnimationFrame(()=>document.querySelectorAll(".kpi .mini i").forEach(i=>i.style.width=i.dataset.w+"%"));
+
+/* ---- systems table ---- */
+document.getElementById("systbl").innerHTML = DATA.systems.map(s=>
+  `<tr><td class="sid">${s.id}</td><td class="name-cell">${s.name}</td>
+   <td><span class="lchip">${s.layer}</span></td><td class="stack">${s.stack||"—"}</td></tr>`
+).join("");
+
+/* ---- timeline canvas ---- */
+(function(){
+  const cv=document.getElementById("tl"), wrap=document.getElementById("cwrap"), tip=document.getElementById("tip");
+  const H=248, PAD={l:38,r:14,t:10,b:22};
+  const hist=DATA.hist; const N=hist.length;
+  const N_SYS=DATA.systems.length;
+  const loadMax=1.7;
+  // panel geometry
+  let geom={};
+  function layout(W){
+    const plotW=W-PAD.l-PAD.r;
+    const loadH=118, stripGap=12, stateH=26, incH=40, labelH=14;
+    const y0=PAD.t;
+    geom={W,plotW,x0:PAD.l,
+      load:{y:y0,h:loadH},
+      state:{y:y0+loadH+labelH+stripGap,h:stateH},
+      inc:{y:y0+loadH+labelH+stripGap+stateH+labelH+8,h:incH}};
+    return geom;
+  }
+  function xAt(i){return geom.x0 + geom.plotW*(i/(N-1));}
+
+  function draw(){
+    const W=wrap.clientWidth; const dpr=window.devicePixelRatio||1;
+    cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+"px";
+    const ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+    layout(W);
+    const ink2=cvar("--ink-2"), muted=cvar("--muted"), grid=cvar("--grid"),
+          accent=cvar("--accent"), good=cvar("--good"), warn=cvar("--warn"),
+          crit=cvar("--crit"), serious=cvar("--serious");
+
+    // day gridlines + labels
+    ctx.font="10px "+cvar("--mono")||"10px monospace";
+    ctx.textAlign="center"; ctx.textBaseline="top";
+    for(let d=0; d<=Math.ceil(N/48); d++){
+      const i=Math.min(d*48,N-1); const x=xAt(i);
+      ctx.strokeStyle=grid; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(x,geom.load.y); ctx.lineTo(x,geom.inc.y+geom.inc.h); ctx.stroke();
+      ctx.fillStyle=muted; ctx.fillText("D"+(d+1), x, geom.inc.y+geom.inc.h+5);
+    }
+
+    // --- load area ---
+    const L=geom.load;
+    function loadY(v){return L.y+L.h*(1-Math.min(v,loadMax)/loadMax);}
+    // faint horizontal guides at load 0.5 / 1.0
+    ctx.strokeStyle=grid; ctx.setLineDash([3,4]);
+    [0.5,1.0].forEach(v=>{ctx.beginPath();ctx.moveTo(geom.x0,loadY(v));ctx.lineTo(geom.x0+geom.plotW,loadY(v));ctx.stroke();});
+    ctx.setLineDash([]);
+    ctx.fillStyle=muted; ctx.textAlign="right"; ctx.textBaseline="middle";
+    ctx.fillText("1.0", geom.x0-6, loadY(1.0)); ctx.fillText("0.5", geom.x0-6, loadY(0.5));
+    const grad=ctx.createLinearGradient(0,L.y,0,L.y+L.h);
+    grad.addColorStop(0, hexA(accent,.34)); grad.addColorStop(1, hexA(accent,.02));
+    ctx.beginPath(); ctx.moveTo(xAt(0), L.y+L.h);
+    hist.forEach((h,i)=>ctx.lineTo(xAt(i), loadY(h[1])));
+    ctx.lineTo(xAt(N-1), L.y+L.h); ctx.closePath(); ctx.fillStyle=grad; ctx.fill();
+    ctx.beginPath(); hist.forEach((h,i)=>{const x=xAt(i),y=loadY(h[1]); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.strokeStyle=accent; ctx.lineWidth=2; ctx.lineJoin="round"; ctx.stroke();
+    // panel label
+    ctx.fillStyle=ink2; ctx.textAlign="left"; ctx.textBaseline="alphabetic"; ctx.font="10px "+cvar("--sans");
+    ctx.fillText("ENTERPRISE LOAD", geom.x0, L.y-1+0);
+
+    // --- state strip (worst state per tick) ---
+    const S=geom.state; const bw=geom.plotW/N;
+    ctx.textBaseline="alphabetic"; ctx.fillStyle=muted; ctx.font="10px "+cvar("--sans");
+    ctx.fillText("SYSTEM STATE", geom.x0, S.y-4);
+    hist.forEach((h,i)=>{
+      const col = h[4]>0?crit : h[3]>0?warn : good;
+      ctx.fillStyle=col; ctx.globalAlpha = h[4]>0||h[3]>0?1:.8;
+      ctx.fillRect(xAt(i)-bw/2, S.y, Math.max(bw,1.2), S.h);
+    });
+    ctx.globalAlpha=1;
+
+    // --- incidents strip (active fault count bars) ---
+    const I=geom.inc; const fMax=Math.max(3,...hist.map(h=>h[5]));
+    ctx.fillStyle=muted; ctx.fillText("ACTIVE INCIDENTS", geom.x0, I.y-4);
+    ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.beginPath();
+    ctx.moveTo(geom.x0,I.y+I.h); ctx.lineTo(geom.x0+geom.plotW,I.y+I.h); ctx.stroke();
+    hist.forEach((h,i)=>{
+      if(!h[5]) return;
+      const bh=I.h*(h[5]/fMax);
+      ctx.fillStyle=serious;
+      ctx.fillRect(xAt(i)-Math.max(bw,1.4)/2, I.y+I.h-bh, Math.max(bw,1.4), bh);
+    });
+    geom.loadY=loadY;
+  }
+
+  function hexA(c,a){ // accept #rrggbb or rgb; return rgba
+    c=c.trim();
+    if(c[0]==="#"){const n=parseInt(c.slice(1),16);return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;}
+    return c.replace("rgb(","rgba(").replace(")",","+a+")");
+  }
+
+  // hover
+  function fmtTime(t){const day=Math.floor(t/48)+1;const m=(t%48)*30;const hh=String(Math.floor(m/60)).padStart(2,"0");return `Day ${day} · ${hh}:${String(m%60).padStart(2,"0")}`;}
+  let cross=null;
+  function onMove(e){
+    const r=cv.getBoundingClientRect(); const x=e.clientX-r.left;
+    let i=Math.round((x-geom.x0)/geom.plotW*(N-1));
+    i=Math.max(0,Math.min(N-1,i)); if(isNaN(i))return;
+    cross=i; redraw();
+    const h=hist[i];
+    tip.innerHTML=`<div class="t-time">${fmtTime(h[0])}</div>`+
+      `<div class="t-row"><span>Load</span><span>${h[1].toFixed(2)}×</span></div>`+
+      `<div class="t-row"><span>Up / Deg / Down</span><span>${h[2]} / ${h[3]} / ${h[4]}</span></div>`+
+      `<div class="t-row"><span>Active incidents</span><span>${h[5]}</span></div>`+
+      `<div class="t-row"><span>Open tickets</span><span>${h[6]}</span></div>`+
+      `<div class="t-row"><span>Operator actions</span><span>${h[7]}</span></div>`;
+    const tx=Math.max(84,Math.min(geom.W-84,xAt(i)));
+    tip.style.left=tx+"px"; tip.style.top=(geom.load.y+8)+"px"; tip.style.opacity=1;
+  }
+  function onLeave(){cross=null;tip.style.opacity=0;redraw();}
+  function redraw(){
+    draw();
+    if(cross!=null){
+      const ctx=cv.getContext("2d"); const x=xAt(cross);
+      ctx.strokeStyle=cvar("--ink-2"); ctx.globalAlpha=.5; ctx.lineWidth=1; ctx.setLineDash([2,3]);
+      ctx.beginPath(); ctx.moveTo(x,geom.load.y); ctx.lineTo(x,geom.inc.y+geom.inc.h); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha=1;
+      const h=hist[cross]; ctx.fillStyle=cvar("--accent");
+      ctx.beginPath(); ctx.arc(x, geom.loadY(h[1]), 3.4, 0, 7); ctx.fill();
+      ctx.strokeStyle=cvar("--surface"); ctx.lineWidth=2; ctx.stroke();
+    }
+  }
+  cv.addEventListener("mousemove",onMove); cv.addEventListener("mouseleave",onLeave);
+  new ResizeObserver(()=>redraw()).observe(wrap);
+  const mo=new MutationObserver(()=>redraw());
+  mo.observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>redraw());
+  redraw();
+})();
+</script>
+"""
+
+
+
+out = HTML.replace("/*__DATA__*/", json.dumps(payload, separators=(",", ":")))
+path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console.html")
+with open(path, "w") as f:
+    f.write(out)
+print("wrote", path, len(out), "bytes  | EHS", payload["ehs"], "vs", payload["noprev"])

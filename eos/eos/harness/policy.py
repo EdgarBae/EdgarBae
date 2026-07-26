@@ -16,6 +16,7 @@ scope, and change windows.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -130,10 +131,20 @@ class PolicyGate:
 
 
 def load_policy(path: str | None = None) -> EnterprisePolicy:
-    """Load a policy from JSON, or the generic EXAMPLE policy if no path given.
+    """Load a governance policy.
 
-    Real deployments point this at ``enterprise_policy.local.json`` (gitignored).
+    Resolution order when ``path`` is not given:
+      1. ``enterprise_policy.local.json`` at the repo root, if it exists — this is
+         where the organization drops its real (private, gitignored) rules;
+      2. otherwise the generic ``EXAMPLE_POLICY`` placeholder.
+
+    So once you add your local file, everything (bench, scenarios, runs) picks it
+    up automatically — no code change needed.
     """
+    if path is None:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        local = os.path.join(root, "enterprise_policy.local.json")
+        path = local if os.path.exists(local) else None
     if path is None:
         return EnterprisePolicy.from_dict(EXAMPLE_POLICY)
     with open(path) as f:
